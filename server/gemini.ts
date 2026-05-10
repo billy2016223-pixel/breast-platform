@@ -1,11 +1,6 @@
 import { GoogleGenerativeAI } from "@google/generative-ai";
 
-const apiKey = process.env.GOOGLE_GEMINI_API_KEY;
-if (!apiKey) {
-  throw new Error("GOOGLE_GEMINI_API_KEY environment variable is not set");
-}
-
-const genAI = new GoogleGenerativeAI(apiKey);
+const genAI = new GoogleGenerativeAI(process.env.GOOGLE_GEMINI_API_KEY ?? "");
 
 export interface AnalysisResult {
   pectoralisScore: number;
@@ -50,6 +45,9 @@ export async function analyzeBreastImage(imageData: {
   data: Buffer;
   mimeType: string;
 }): Promise<AnalysisResult> {
+  if (!process.env.GOOGLE_GEMINI_API_KEY) {
+    throw new Error("GOOGLE_GEMINI_API_KEY 未設定，請在 Render 環境變數中加入此 Key");
+  }
   const start = Date.now();
   const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
 
