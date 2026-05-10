@@ -1,0 +1,12 @@
+services:
+  - type: web
+    name: breast-imaging-platform
+    env: node
+    buildCommand: npm install && npm run build
+    startCommand: npm start
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: GOOGLE_GEMINI_API_KEY
+        sync: false
+    healthCheckPath: /api/health
