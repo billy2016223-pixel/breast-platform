@@ -80,7 +80,15 @@ export async function analyzeBreastImage(imageData: {
   console.log("Claude raw response:", text.slice(0, 500));
 
   const match = text.match(/\{[\s\S]*\}/);
-  if (!match) throw new Error("找不到 JSON，原文: " + text.slice(0, 300));
+  if (!match) {
+    return {
+      pectoralisScore: 50, nippleScore: 50, tissueCompletenessScore: 50,
+      tissueElasticityScore: 50, radiationDoseScore: 50, grade: "C" as const,
+      defects: ["AI 無法解析此影像，請確認影像格式是否為標準乳房攝影"],
+      analysis: "AI 回應格式異常，無法完成分析。請重新上傳或嘗試其他影像。",
+      analysisTime: Date.now() - start,
+    };
+  }
 
   const d = JSON.parse(match[0]);
 

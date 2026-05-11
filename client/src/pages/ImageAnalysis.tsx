@@ -89,9 +89,12 @@ export default function ImageAnalysis() {
     const reader = new FileReader();
     reader.onload = (ev) => {
       const arrayBuffer = ev.target?.result as ArrayBuffer;
-      const base64 = btoa(
-        new Uint8Array(arrayBuffer).reduce((data, byte) => data + String.fromCharCode(byte), "")
-      );
+      const bytes = new Uint8Array(arrayBuffer);
+      let binary = "";
+      for (let i = 0; i < bytes.byteLength; i++) {
+        binary += String.fromCharCode(bytes[i]);
+      }
+      const base64 = btoa(binary);
 
       if (base64.length > 7 * 1024 * 1024) {
         toast.error("檔案過大，請使用 5MB 以下的影像");
