@@ -76,8 +76,10 @@ export async function analyzeBreastImage(imageData: {
   if (!textBlock || textBlock.type !== "text") throw new Error("Claude 回應格式錯誤");
 
   const text = textBlock.text;
-  const match = text.match(/\{[\s\S]*\}/);
-  if (!match) throw new Error("Claude 回應格式錯誤");
+  // Strip markdown code fences if present
+  const stripped = text.replace(/```(?:json)?\s*/gi, "").replace(/```/g, "");
+  const match = stripped.match(/\{[\s\S]*\}/);
+  if (!match) throw new Error("Claude 回應格式錯誤: " + text.slice(0, 200));
 
   const d = JSON.parse(match[0]);
 
