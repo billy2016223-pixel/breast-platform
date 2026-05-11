@@ -80,7 +80,10 @@ export async function analyzeBreastImage(imageData: {
   const text = textBlock.text;
   console.log("Claude raw response:", text.slice(0, 500));
   // Strip markdown code fences if present
-  const stripped = text.replace(/```(?:json)?\s*/gi, "").replace(/```/g, "");
+  const stripped = text
+    .replace(/^```(?:json)?\s*/i, "")
+    .replace(/```\s*$/i, "")
+    .trim();
   const match = stripped.match(/\{[\s\S]*\}/);
   if (!match) throw new Error("找不到 JSON，原文: " + text.slice(0, 300));
 
