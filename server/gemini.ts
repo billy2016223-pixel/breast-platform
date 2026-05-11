@@ -12,22 +12,20 @@ export interface AnalysisResult {
   analysisTime: number;
 }
 
-const PROMPT = `您是一位資深的乳房攝影影像分析專家。請分析這張乳房攝影影像，並評估以下五個指標，每個指標評分 0-100 分：
+const SYSTEM_PROMPT = `你是乳房攝影影像品質評估系統。你只能回傳 JSON 物件，不能有任何其他文字、說明或 markdown 格式。`;
 
-1. 胸大肌顯影度 (Pectoralis Muscle): 評估胸大肌在影像中的顯示程度和清晰度
-2. 乳頭輪廓 (Nipple Contour): 評估乳頭位置和輪廓清晰度
-3. 組織完整性 (Tissue Completeness): 評估乳房組織完整性和邊界清晰度
-4. 組織延展性 (Tissue Extension): 評估乳房組織延展性和均勻分佈
-5. 輻射劑量 (Radiation Dose): 評估曝露參數的適當性（高分表示劑量適當）
+const PROMPT = `請分析這張乳房攝影影像，評估以下五個指標（各 0-100 分）：
 
-評等標準：
-- A (優等): 所有指標平均 >= 90
-- B (符合): 所有指標平均 >= 80
-- C (不予通過): 所有指標平均 >= 70
-- D (不予通過): 所有指標平均 < 70
+1. 胸大肌顯影度 (Pectoralis Muscle)
+2. 乳頭輪廓 (Nipple Contour)
+3. 組織完整性 (Tissue Completeness)
+4. 組織延展性 (Tissue Extension)
+5. 輻射劑量 (Radiation Dose)
 
-請以 JSON 格式回應：
-{"pectoralisScore": <0-100>, "nippleScore": <0-100>, "tissueCompletenessScore": <0-100>, "tissueElasticityScore": <0-100>, "radiationDoseScore": <0-100>, "grade": "<A/B/C/D>", "defects": [<缺陷列表，空陣列若無缺陷>], "analysis": "<詳細中文分析說明>"}`;
+評等：A >= 90，B >= 80，C >= 70，D < 70（以五項平均計算）
+
+只回傳以下 JSON，不要有任何其他文字：
+{"pectoralisScore":數字,"nippleScore":數字,"tissueCompletenessScore":數字,"tissueElasticityScore":數字,"radiationDoseScore":數字,"grade":"A或B或C或D","defects":["缺陷1","缺陷2"],"analysis":"詳細中文分析"}`;
 
 function validateGrade(g: unknown): "A" | "B" | "C" | "D" {
   if (g === "A" || g === "B" || g === "C" || g === "D") return g;
@@ -53,7 +51,8 @@ export async function analyzeBreastImage(imageData: {
 
   const response = await client.messages.create({
     model: "claude-opus-4-6",
-    max_tokens: 1024,
+    max_tokens: 2048,
+    system: SYSTEM_PROMPT,
     messages: [
       {
         role: "user",
@@ -74,12 +73,12 @@ export async function analyzeBreastImage(imageData: {
 
   const textBlock = response.content.find((b) => b.type === "text");
   if (!textBlock || textBlock.type !== "text") {
-    throw new Error("Claude 無文字回應，content: " + JSON.stringify(response.content).slice(0, 300));
+    throw new Error("Claude 無文字回應");
   }
 
   const text = textBlock.text;
   console.log("Claude raw response:", text.slice(0, 500));
-  // Directly extract JSON object regardless of code fences
+
   const match = text.match(/\{[\s\S]*\}/);
   if (!match) throw new Error("找不到 JSON，原文: " + text.slice(0, 300));
 
