@@ -7,6 +7,6 @@ services:
     envVars:
       - key: NODE_ENV
         value: production
-      - key: GOOGLE_GEMINI_API_KEY
+      - key: ANTHROPIC_API_KEY
         sync: false
     healthCheckPath: /api/health

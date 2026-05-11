@@ -1,6 +1,4 @@
-import { GoogleGenerativeAI } from "@google/generative-ai";
-
-const genAI = new GoogleGenerativeAI(process.env.GOOGLE_GEMINI_API_KEY ?? "");
+import Anthropic from "@anthropic-ai/sdk";
 
 export interface AnalysisResult {
   pectoralisScore: number;
@@ -45,22 +43,41 @@ export async function analyzeBreastImage(imageData: {
   data: Buffer;
   mimeType: string;
 }): Promise<AnalysisResult> {
-  if (!process.env.GOOGLE_GEMINI_API_KEY) {
-    throw new Error("GOOGLE_GEMINI_API_KEY 未設定，請在 Render 環境變數中加入此 Key");
+  if (!process.env.ANTHROPIC_API_KEY) {
+    throw new Error("ANTHROPIC_API_KEY 未設定，請在 Render 環境變數中加入此 Key");
   }
   const start = Date.now();
-  const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
+  const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
   const base64 = imageData.data.toString("base64");
 
-  const response = await model.generateContent([
-    { text: PROMPT },
-    { inlineData: { mimeType: imageData.mimeType, data: base64 } },
-  ]);
+  const response = await client.messages.create({
+    model: "claude-opus-4-6",
+    max_tokens: 1024,
+    messages: [
+      {
+        role: "user",
+        content: [
+          {
+            type: "image",
+            source: {
+              type: "base64",
+              media_type: imageData.mimeType as "image/jpeg" | "image/png" | "image/gif" | "image/webp",
+              data: base64,
+            },
+          },
+          { type: "text", text: PROMPT },
+        ],
+      },
+    ],
+  });
 
-  const text = response.response.text();
+  const textBlock = response.content.find((b) => b.type === "text");
+  if (!textBlock || textBlock.type !== "text") throw new Error("Claude 回應格式錯誤");
+
+  const text = textBlock.text;
   const match = text.match(/\{[\s\S]*\}/);
-  if (!match) throw new Error("Gemini 回應格式錯誤");
+  if (!match) throw new Error("Claude 回應格式錯誤");
 
   const d = JSON.parse(match[0]);
 
