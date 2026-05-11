@@ -49,7 +49,7 @@ export async function analyzeBreastImage(imageData: {
     throw new Error("GOOGLE_GEMINI_API_KEY 未設定，請在 Render 環境變數中加入此 Key");
   }
   const start = Date.now();
-  const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash-latest" });
+  const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
 
   const base64 = imageData.data.toString("base64");
 
