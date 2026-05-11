@@ -73,13 +73,16 @@ export async function analyzeBreastImage(imageData: {
   });
 
   const textBlock = response.content.find((b) => b.type === "text");
-  if (!textBlock || textBlock.type !== "text") throw new Error("Claude 回應格式錯誤");
+  if (!textBlock || textBlock.type !== "text") {
+    throw new Error("Claude 無文字回應，content: " + JSON.stringify(response.content).slice(0, 300));
+  }
 
   const text = textBlock.text;
+  console.log("Claude raw response:", text.slice(0, 500));
   // Strip markdown code fences if present
   const stripped = text.replace(/```(?:json)?\s*/gi, "").replace(/```/g, "");
   const match = stripped.match(/\{[\s\S]*\}/);
-  if (!match) throw new Error("Claude 回應格式錯誤: " + text.slice(0, 200));
+  if (!match) throw new Error("找不到 JSON，原文: " + text.slice(0, 300));
 
   const d = JSON.parse(match[0]);
 
