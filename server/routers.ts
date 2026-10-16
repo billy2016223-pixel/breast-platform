@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { router, procedure, adminProcedure } from "./trpc.js";
 import { analyzeBreastImage } from "./gemini.js";
-import { saveImage, insertAnalysis, listAnalyses, listBatches } from "./db.js";
+import { saveImage, insertAnalysis, listAnalyses, listBatches, listFolders } from "./db.js";
 import { analysisEvents } from "./events.js";
 
 export const appRouter = router({
@@ -13,6 +13,7 @@ export const appRouter = router({
           mimeType: z.string(),
           fileName: z.string().max(255).default("未命名"),
           batchId: z.string().max(64),
+          relativePath: z.string().max(1024).optional(),
         })
       )
       .mutation(async ({ input }) => {
@@ -24,6 +25,7 @@ export const appRouter = router({
           fileName: input.fileName,
           mimeType: input.mimeType,
           imageFile,
+          relativePath: input.relativePath,
         };
         try {
           const result = await analyzeBreastImage({
@@ -58,6 +60,8 @@ export const appRouter = router({
           batchId: z.string().optional(),
           grade: z.enum(["A", "B", "C", "D"]).optional(),
           status: z.enum(["ok", "parse_failed", "error"]).optional(),
+          hospital: z.string().optional(),
+          patient: z.string().optional(),
           limit: z.number().int().min(1).max(200).default(50),
           offset: z.number().int().min(0).default(0),
         })
@@ -65,6 +69,8 @@ export const appRouter = router({
       .query(({ input }) => listAnalyses(input)),
 
     batches: adminProcedure.query(() => listBatches()),
+
+    folders: adminProcedure.query(() => listFolders()),
   }),
 
   calculator: router({

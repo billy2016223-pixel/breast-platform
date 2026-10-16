@@ -35,6 +35,32 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_analyses_created ON analyses(created_at);
 `);
 
+// 舊資料庫補上資料夾分類欄位（醫院／病人）
+const existingCols = new Set(
+  (db.prepare(`PRAGMA table_info(analyses)`).all() as { name: string }[]).map((c) => c.name)
+);
+for (const col of ["folder_path", "hospital", "patient"]) {
+  if (!existingCols.has(col)) db.exec(`ALTER TABLE analyses ADD COLUMN ${col} TEXT`);
+}
+db.exec(`CREATE INDEX IF NOT EXISTS idx_analyses_folder ON analyses(hospital, patient)`);
+
+// 上傳時的相對路徑如「醫院/病人/影像.jpg」，取最後兩層資料夾作為醫院與病人
+export function parseFolder(relativePath: string | undefined): {
+  folderPath: string | null;
+  hospital: string | null;
+  patient: string | null;
+} {
+  const dirs = (relativePath ?? "").split(/[\\/]/).filter(Boolean).slice(0, -1);
+  if (dirs.length === 0) return { folderPath: null, hospital: null, patient: null };
+  return {
+    folderPath: dirs.join("/"),
+    patient: dirs[dirs.length - 1],
+    hospital: dirs.length >= 2 ? dirs[dirs.length - 2] : null,
+  };
+}
+
+export const NO_FOLDER = "__none__";
+
 export type AnalysisStatus = "ok" | "parse_failed" | "error";
 
 export interface AnalysisRecord {
@@ -54,6 +80,9 @@ export interface AnalysisRecord {
   analysis: string | null;
   analysisTime: number | null;
   createdAt: string;
+  folderPath: string | null;
+  hospital: string | null;
+  patient: string | null;
 }
 
 const EXT: Record<string, string> = {
@@ -76,18 +105,20 @@ export function insertAnalysis(row: {
   fileName: string;
   mimeType: string;
   imageFile: string;
+  relativePath?: string;
   status: AnalysisStatus;
   error?: string;
   result?: AnalysisResult;
 }) {
   const r = row.result;
+  const folder = parseFolder(row.relativePath);
   db.prepare(
     `INSERT INTO analyses (
       id, batch_id, file_name, mime_type, image_file, status, error,
       pectoralis_score, nipple_score, tissue_completeness_score,
       tissue_elasticity_score, radiation_dose_score, grade, defects,
-      analysis, analysis_time, created_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      analysis, analysis_time, created_at, folder_path, hospital, patient
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(
     row.id,
     row.batchId,
@@ -105,7 +136,10 @@ export function insertAnalysis(row: {
     JSON.stringify(r?.defects ?? []),
     r?.analysis ?? null,
     r?.analysisTime ?? null,
-    new Date().toISOString()
+    new Date().toISOString(),
+    folder.folderPath,
+    folder.hospital,
+    folder.patient
   );
 }
 
@@ -122,8 +156,8 @@ export function importAnalysis(rec: AnalysisRecord, image: Buffer) {
       id, batch_id, file_name, mime_type, image_file, status, error,
       pectoralis_score, nipple_score, tissue_completeness_score,
       tissue_elasticity_score, radiation_dose_score, grade, defects,
-      analysis, analysis_time, created_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      analysis, analysis_time, created_at, folder_path, hospital, patient
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(
     rec.id,
     rec.batchId,
@@ -141,7 +175,10 @@ export function importAnalysis(rec: AnalysisRecord, image: Buffer) {
     JSON.stringify(rec.defects),
     rec.analysis,
     rec.analysisTime,
-    rec.createdAt
+    rec.createdAt,
+    rec.folderPath ?? null,
+    rec.hospital ?? null,
+    rec.patient ?? null
   );
 }
 
@@ -163,6 +200,9 @@ function toRecord(row: Record<string, unknown>): AnalysisRecord {
     analysis: row.analysis as string | null,
     analysisTime: row.analysis_time as number | null,
     createdAt: row.created_at as string,
+    folderPath: row.folder_path as string | null,
+    hospital: row.hospital as string | null,
+    patient: row.patient as string | null,
   };
 }
 
@@ -170,6 +210,8 @@ export function listAnalyses(opts: {
   batchId?: string;
   grade?: string;
   status?: string;
+  hospital?: string;
+  patient?: string;
   limit: number;
   offset: number;
 }): { items: AnalysisRecord[]; total: number } {
@@ -186,6 +228,14 @@ export function listAnalyses(opts: {
   if (opts.status) {
     where.push("status = ?");
     params.push(opts.status);
+  }
+  // NO_FOLDER 代表沒有資料夾資訊（單張上傳）的紀錄
+  for (const [col, value] of [["hospital", opts.hospital], ["patient", opts.patient]] as const) {
+    if (value === NO_FOLDER) where.push(`${col} IS NULL`);
+    else if (value) {
+      where.push(`${col} = ?`);
+      params.push(value);
+    }
   }
   const clause = where.length ? `WHERE ${where.join(" AND ")}` : "";
   const total = (
@@ -205,6 +255,17 @@ export function listBatches() {
        FROM analyses GROUP BY batch_id ORDER BY startedAt DESC`
     )
     .all() as { batchId: string; count: number; startedAt: string; okCount: number }[];
+}
+
+// 後台左側的醫院／病人目錄
+export function listFolders() {
+  return db
+    .prepare(
+      `SELECT hospital, patient, COUNT(*) AS count,
+        SUM(CASE WHEN status = 'ok' THEN 1 ELSE 0 END) AS okCount
+       FROM analyses GROUP BY hospital, patient ORDER BY hospital, patient`
+    )
+    .all() as { hospital: string | null; patient: string | null; count: number; okCount: number }[];
 }
 
 export function getImageFile(id: string): { path: string; mimeType: string } | null {

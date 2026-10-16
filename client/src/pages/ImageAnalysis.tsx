@@ -15,6 +15,8 @@ type ItemStatus = "pending" | "running" | "done" | "error";
 type QueueItem = {
   key: string;
   file: File;
+  // 資料夾上傳時的相對路徑，例如「醫院/病人/影像.jpg」
+  relativePath: string;
   previewUrl: string;
   status: ItemStatus;
   error?: string;
@@ -33,6 +35,38 @@ function readAsBase64(file: File): Promise<string> {
   });
 }
 
+type PickedFile = { file: File; relativePath: string };
+
+// 拖曳進來的資料夾要逐層展開，才能拿到裡面每個檔案與它的路徑
+async function collectDropped(items: DataTransferItemList): Promise<PickedFile[]> {
+  const out: PickedFile[] = [];
+  const walk = async (entry: FileSystemEntry): Promise<void> => {
+    if (entry.isFile) {
+      const file = await new Promise<File>((resolve, reject) =>
+        (entry as FileSystemFileEntry).file(resolve, reject)
+      );
+      out.push({ file, relativePath: entry.fullPath.replace(/^\//, "") });
+    } else if (entry.isDirectory) {
+      const reader = (entry as FileSystemDirectoryEntry).createReader();
+      // readEntries 每次只回傳一部分，要讀到空為止
+      while (true) {
+        const batch = await new Promise<FileSystemEntry[]>((resolve, reject) =>
+          reader.readEntries(resolve, reject)
+        );
+        if (batch.length === 0) break;
+        for (const child of batch) await walk(child);
+      }
+    }
+  };
+  const entries = Array.from(items)
+    .map((it) => it.webkitGetAsEntry())
+    .filter((e): e is FileSystemEntry => !!e);
+  for (const entry of entries) await walk(entry);
+  return out;
+}
+
+const folderOf = (relativePath: string) => relativePath.split("/").slice(0, -1).join(" / ");
+
 const StatusIcon = ({ status }: { status: ItemStatus }) => {
   if (status === "running") return <Loader2 className="w-4 h-4 animate-spin text-blue-600" />;
   if (status === "done") return <CheckCircle2 className="w-4 h-4 text-green-600" />;
@@ -46,17 +80,19 @@ export default function ImageAnalysis() {
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [dragOver, setDragOver] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
+  const folderInputRef = useRef<HTMLInputElement>(null);
 
   const analyzeMutation = trpc.imageAnalysis.analyze.useMutation();
 
   const update = (key: string, patch: Partial<QueueItem>) =>
     setItems((prev) => prev.map((it) => (it.key === key ? { ...it, ...patch } : it)));
 
-  const addFiles = (fileList: FileList | null) => {
-    if (!fileList) return;
+  const addFiles = (picked: PickedFile[]) => {
     const accepted: QueueItem[] = [];
     let skipped = 0;
-    for (const file of Array.from(fileList)) {
+    for (const { file, relativePath } of picked) {
+      // 系統檔（如 Thumbs.db、.DS_Store）直接忽略，不算進略過數量
+      if (file.name.startsWith(".") || file.name === "Thumbs.db") continue;
       if (!file.type.startsWith("image/") || file.size > MAX_FILE_BYTES) {
         skipped++;
         continue;
@@ -64,6 +100,7 @@ export default function ImageAnalysis() {
       accepted.push({
         key: `${file.name}-${file.size}-${file.lastModified}-${Math.random().toString(36).slice(2)}`,
         file,
+        relativePath,
         previewUrl: URL.createObjectURL(file),
         status: "pending",
       });
@@ -111,6 +148,7 @@ export default function ImageAnalysis() {
             mimeType: item.file.type || "image/jpeg",
             fileName: item.file.name,
             batchId,
+            relativePath: item.relativePath,
           });
           update(item.key, { status: "done", result });
           okCount++;
@@ -155,19 +193,46 @@ export default function ImageAnalysis() {
                   setDragOver(true);
                 }}
                 onDragLeave={() => setDragOver(false)}
-                onDrop={(e) => {
+                onDrop={async (e) => {
                   e.preventDefault();
                   setDragOver(false);
-                  addFiles(e.dataTransfer.files);
+                  addFiles(await collectDropped(e.dataTransfer.items));
                 }}
                 className={`block border-2 border-dashed rounded-lg p-8 text-center transition cursor-pointer ${
                   dragOver ? "border-blue-500 bg-blue-50" : "border-slate-300 hover:border-blue-400"
                 }`}
               >
                 <Upload className="w-12 h-12 text-slate-400 mx-auto mb-3" />
-                <p className="text-slate-600 font-semibold mb-1">點擊選擇或拖曳多張影像</p>
-                <p className="text-sm text-slate-400">JPG / PNG，每張最大 5MB</p>
+                <p className="text-slate-600 font-semibold mb-1">點擊選擇影像，或把整個資料夾拖進來</p>
+                <p className="text-sm text-slate-400">JPG / PNG，每張最大 5MB，會保留「醫院 / 病人」資料夾分類</p>
               </label>
+              <Button
+                type="button"
+                variant="outline"
+                className="w-full"
+                disabled={running}
+                onClick={() => folderInputRef.current?.click()}
+              >
+                選擇整個資料夾上傳
+              </Button>
+              <input
+                ref={(el) => {
+                  folderInputRef.current = el;
+                  el?.setAttribute("webkitdirectory", "");
+                }}
+                type="file"
+                multiple
+                className="hidden"
+                onChange={(e) => {
+                  addFiles(
+                    Array.from(e.target.files ?? []).map((file) => ({
+                      file,
+                      relativePath: file.webkitRelativePath || file.name,
+                    }))
+                  );
+                  e.target.value = "";
+                }}
+              />
               <input
                 ref={inputRef}
                 id="file-input"
@@ -176,7 +241,7 @@ export default function ImageAnalysis() {
                 multiple
                 className="hidden"
                 onChange={(e) => {
-                  addFiles(e.target.files);
+                  addFiles(Array.from(e.target.files ?? []).map((file) => ({ file, relativePath: file.name })));
                   if (inputRef.current) inputRef.current.value = "";
                 }}
               />
@@ -210,7 +275,9 @@ export default function ImageAnalysis() {
                         <div className="flex-1 min-w-0">
                           <p className="text-sm text-slate-900 truncate">{it.file.name}</p>
                           <p className="text-xs text-slate-500 truncate">
-                            {it.status === "error" ? it.error : `${(it.file.size / 1024 / 1024).toFixed(2)} MB`}
+                            {it.status === "error"
+                              ? it.error
+                              : folderOf(it.relativePath) || `${(it.file.size / 1024 / 1024).toFixed(2)} MB`}
                           </p>
                         </div>
                         {it.result?.grade && (

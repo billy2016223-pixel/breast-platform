@@ -7,6 +7,9 @@ import { Loader2, X } from "lucide-react";
 import { toast } from "sonner";
 
 const PAGE_SIZE = 50;
+// 與伺服器 db.ts 的 NO_FOLDER 一致，代表沒有資料夾資訊的紀錄
+const NO_FOLDER = "__none__";
+const folderLabel = (name: string | null) => name ?? "未分類";
 const GRADES = ["A", "B", "C", "D"] as const;
 
 const STATUS_LABEL: Record<string, string> = {
@@ -61,6 +64,8 @@ export default function Admin() {
   const [token, setToken] = useState<string | null>(getAdminToken());
   const [batchId, setBatchId] = useState<string>("");
   const [grade, setGrade] = useState<string>("");
+  const [hospital, setHospital] = useState<string>("");
+  const [patient, setPatient] = useState<string>("");
   const [page, setPage] = useState(0);
   const [selectedId, setSelectedId] = useState<string | null>(null);
 
@@ -68,12 +73,15 @@ export default function Admin() {
     {
       batchId: batchId || undefined,
       grade: (grade || undefined) as (typeof GRADES)[number] | undefined,
+      hospital: hospital || undefined,
+      patient: patient || undefined,
       limit: PAGE_SIZE,
       offset: page * PAGE_SIZE,
     },
     { enabled: !!token, retry: false }
   );
   const batchesQuery = trpc.admin.batches.useQuery(undefined, { enabled: !!token, retry: false });
+  const foldersQuery = trpc.admin.folders.useQuery(undefined, { enabled: !!token, retry: false });
 
   const logout = () => {
     setAdminToken(null);
@@ -88,6 +96,7 @@ export default function Admin() {
           setToken(t);
           listQuery.refetch();
           batchesQuery.refetch();
+          foldersQuery.refetch();
         }}
       />
     );
@@ -97,6 +106,23 @@ export default function Admin() {
   const total = listQuery.data?.total ?? 0;
   const pageCount = Math.max(1, Math.ceil(total / PAGE_SIZE));
   const selected = items.find((it) => it.id === selectedId) ?? null;
+  // 依醫院整理左側目錄
+  const tree = new Map<string, { hospital: string | null; count: number; patients: typeof folders }>();
+  const folders = foldersQuery.data ?? [];
+  for (const f of folders) {
+    const key = f.hospital ?? NO_FOLDER;
+    const node = tree.get(key) ?? { hospital: f.hospital, count: 0, patients: [] };
+    node.count += f.count;
+    node.patients.push(f);
+    tree.set(key, node);
+  }
+  const selectFolder = (h: string, p: string) => {
+    setHospital(h);
+    setPatient(p);
+    setPage(0);
+    setSelectedId(null);
+  };
+
   const imageUrl = (id: string) => `/api/images/${id}?token=${encodeURIComponent(token)}`;
 
   return (
@@ -145,8 +171,51 @@ export default function Admin() {
           </select>
         </div>
 
-        <div className="grid grid-cols-1 lg:grid-cols-5 gap-6">
-          <Card className="border-slate-200 lg:col-span-3 overflow-hidden">
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+          <Card className="border-slate-200 lg:col-span-3 p-3 h-fit">
+            <p className="text-sm font-semibold text-slate-900 mb-2 px-2">醫院 / 病人</p>
+            <button
+              type="button"
+              onClick={() => selectFolder("", "")}
+              className={`w-full text-left text-sm px-2 py-1 rounded ${
+                !hospital && !patient ? "bg-blue-50 text-blue-700" : "hover:bg-slate-50"
+              }`}
+            >
+              全部（{folders.reduce((n, f) => n + f.count, 0)}）
+            </button>
+            {Array.from(tree.entries()).map(([key, node]) => (
+              <div key={key} className="mt-1">
+                <button
+                  type="button"
+                  onClick={() => selectFolder(key, "")}
+                  className={`w-full text-left text-sm font-semibold px-2 py-1 rounded truncate ${
+                    hospital === key && !patient ? "bg-blue-50 text-blue-700" : "hover:bg-slate-50 text-slate-800"
+                  }`}
+                >
+                  {folderLabel(node.hospital)}（{node.count}）
+                </button>
+                {node.patients.map((p) => {
+                  const pKey = p.patient ?? NO_FOLDER;
+                  return (
+                    <button
+                      key={pKey}
+                      type="button"
+                      onClick={() => selectFolder(key, pKey)}
+                      className={`w-full text-left text-sm pl-6 pr-2 py-1 rounded truncate ${
+                        hospital === key && patient === pKey
+                          ? "bg-blue-50 text-blue-700"
+                          : "hover:bg-slate-50 text-slate-600"
+                      }`}
+                    >
+                      {folderLabel(p.patient)}（{p.count}）
+                    </button>
+                  );
+                })}
+              </div>
+            ))}
+          </Card>
+
+          <Card className="border-slate-200 lg:col-span-5 overflow-hidden">
             {listQuery.isLoading ? (
               <div className="p-8 flex justify-center">
                 <Loader2 className="w-6 h-6 animate-spin text-slate-400" />
@@ -159,7 +228,7 @@ export default function Admin() {
                   <thead className="bg-slate-50 text-slate-600">
                     <tr>
                       <th className="p-2 text-left font-semibold">影像</th>
-                      <th className="p-2 text-left font-semibold">檔名</th>
+                      <th className="p-2 text-left font-semibold">醫院 / 病人 / 檔名</th>
                       <th className="p-2 text-center font-semibold">評等</th>
                       <th className="p-2 text-center font-semibold">狀態</th>
                       <th className="p-2 text-left font-semibold">時間</th>
@@ -180,7 +249,12 @@ export default function Admin() {
                             className="w-12 h-12 object-cover rounded border border-slate-200"
                           />
                         </td>
-                        <td className="p-2 max-w-48 truncate text-slate-900">{it.fileName}</td>
+                        <td className="p-2 max-w-48">
+                          <p className="text-xs text-slate-500 truncate">
+                            {folderLabel(it.hospital)} / {folderLabel(it.patient)}
+                          </p>
+                          <p className="truncate text-slate-900">{it.fileName}</p>
+                        </td>
                         <td className="p-2 text-center">
                           <span className={`px-2 py-0.5 rounded font-bold ${gradeColor(it.grade)}`}>
                             {it.grade ?? "-"}
@@ -214,7 +288,7 @@ export default function Admin() {
             </div>
           </Card>
 
-          <div className="lg:col-span-2">
+          <div className="lg:col-span-4">
             {selected ? (
               <Card className="border-slate-200 lg:sticky lg:top-6">
                 <CardHeader>
@@ -230,6 +304,7 @@ export default function Admin() {
                     </button>
                   </div>
                   <CardDescription>
+                    {folderLabel(selected.hospital)} / {folderLabel(selected.patient)}，
                     {new Date(selected.createdAt).toLocaleString("zh-TW")}
                     {selected.analysisTime != null && `，耗時 ${(selected.analysisTime / 1000).toFixed(2)} 秒`}
                   </CardDescription>
