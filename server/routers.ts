@@ -2,6 +2,7 @@ import { z } from "zod";
 import { router, procedure, adminProcedure } from "./trpc.js";
 import { analyzeBreastImage } from "./gemini.js";
 import { saveImage, insertAnalysis, listAnalyses, listBatches } from "./db.js";
+import { analysisEvents } from "./events.js";
 
 export const appRouter = router({
   imageAnalysis: router({
@@ -30,10 +31,12 @@ export const appRouter = router({
             mimeType: input.mimeType,
           });
           insertAnalysis({ ...base, status: result.parseFailed ? "parse_failed" : "ok", result });
+          analysisEvents.emit("saved", id);
           return { id, ...result };
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
           insertAnalysis({ ...base, status: "error", error: message });
+          analysisEvents.emit("saved", id);
           throw err;
         }
       }),

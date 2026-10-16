@@ -1,6 +1,6 @@
 // 把雲端（Render）上的分析紀錄與原圖拉回本機 data/ 保存。
 // 用法：npm run sync          同步一次
-//       npm run sync -- --watch  每 5 分鐘同步一次，持續執行
+//       npm run sync -- --watch  持續執行：雲端一完成分析就立刻同步，另每 5 分鐘補抓一次
 // 需要在 .env 設定 REMOTE_URL 與 REMOTE_ADMIN_PASSWORD
 import { hasAnalysis, importAnalysis, DATA_DIR, type AnalysisRecord } from "../server/db.js";
 
@@ -49,11 +49,68 @@ async function syncOnce() {
   console.log(`[${new Date().toLocaleString("zh-TW")}] 遠端共 ${total} 筆，新存入本機 ${added} 筆`);
 }
 
+// 同一時間只跑一次同步；跑的期間又有通知進來，結束後再補跑一次
+let syncing = false;
+let pending = false;
+async function requestSync() {
+  if (syncing) {
+    pending = true;
+    return;
+  }
+  syncing = true;
+  try {
+    do {
+      pending = false;
+      await syncOnce();
+    } while (pending);
+  } catch (err) {
+    console.error("同步失敗：", (err as Error).message);
+  } finally {
+    syncing = false;
+  }
+}
+
+// 訂閱雲端的即時通知；斷線後自動重連
+async function subscribe() {
+  let retryMs = 5_000;
+  while (true) {
+    try {
+      const res = await fetch(`${REMOTE_URL}/api/events`, {
+        headers: { "x-admin-token": PASSWORD!, Accept: "text/event-stream" },
+      });
+      if (res.status === 401) throw new Error("遠端後台密碼錯誤");
+      if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`);
+      console.log("已連上雲端即時通知");
+      retryMs = 5_000;
+      // 重連時可能漏掉通知，先補抓一次
+      requestSync();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      const reader = res.body.getReader();
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        let idx;
+        while ((idx = buffer.indexOf("\n\n")) >= 0) {
+          const message = buffer.slice(0, idx);
+          buffer = buffer.slice(idx + 2);
+          if (message.includes("event: saved")) requestSync();
+        }
+      }
+      console.warn("即時通知連線中斷，重新連線中");
+    } catch (err) {
+      console.warn(`即時通知連線失敗（${(err as Error).message}），${retryMs / 1000} 秒後重試`);
+      await new Promise((r) => setTimeout(r, retryMs));
+      retryMs = Math.min(retryMs * 2, 60_000);
+    }
+  }
+}
+
 console.log(`從 ${REMOTE_URL} 同步到 ${DATA_DIR}`);
 if (process.argv.includes("--watch")) {
-  const run = () => syncOnce().catch((err) => console.error("同步失敗：", err.message));
-  run();
-  setInterval(run, WATCH_INTERVAL_MS);
+  subscribe();
+  setInterval(requestSync, WATCH_INTERVAL_MS);
 } else {
   syncOnce().catch((err) => {
     console.error("同步失敗：", err.message);
