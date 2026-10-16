@@ -257,6 +257,23 @@ export function listBatches() {
     .all() as { batchId: string; count: number; startedAt: string; okCount: number }[];
 }
 
+// 補登資料夾分類：只更新還沒有分類的紀錄
+export function listUnfiled(): { id: string; fileName: string }[] {
+  return db
+    .prepare(`SELECT id, file_name AS fileName FROM analyses WHERE folder_path IS NULL`)
+    .all() as { id: string; fileName: string }[];
+}
+
+export function setFolder(id: string, relativePath: string) {
+  const f = parseFolder(relativePath);
+  db.prepare(`UPDATE analyses SET folder_path = ?, hospital = ?, patient = ? WHERE id = ?`).run(
+    f.folderPath,
+    f.hospital,
+    f.patient,
+    id
+  );
+}
+
 // 後台左側的醫院／病人目錄
 export function listFolders() {
   return db

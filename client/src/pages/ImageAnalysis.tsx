@@ -106,6 +106,10 @@ export default function ImageAnalysis() {
       });
     }
     if (skipped > 0) toast.error(`有 ${skipped} 個檔案不是影像或超過 5MB，已略過`);
+    const noFolder = accepted.filter((it) => !it.relativePath.includes("/")).length;
+    if (noFolder > 0) {
+      toast.warning(`有 ${noFolder} 張沒有資料夾資訊，後台會歸在「未分類」。要分類請改用選擇資料夾或拖曳資料夾。`);
+    }
     setItems((prev) => [...prev, ...accepted]);
   };
 
@@ -187,7 +191,7 @@ export default function ImageAnalysis() {
             </CardHeader>
             <CardContent className="space-y-4">
               <label
-                htmlFor="file-input"
+                htmlFor="folder-input"
                 onDragOver={(e) => {
                   e.preventDefault();
                   setDragOver(true);
@@ -203,19 +207,23 @@ export default function ImageAnalysis() {
                 }`}
               >
                 <Upload className="w-12 h-12 text-slate-400 mx-auto mb-3" />
-                <p className="text-slate-600 font-semibold mb-1">點擊選擇影像，或把整個資料夾拖進來</p>
-                <p className="text-sm text-slate-400">JPG / PNG，每張最大 5MB，會保留「醫院 / 病人」資料夾分類</p>
+                <p className="text-slate-600 font-semibold mb-1">點擊選擇資料夾，或把資料夾拖進來</p>
+                <p className="text-sm text-slate-400">
+                  請選最外層（含各醫院）的資料夾，系統會依「醫院 / 病人」自動分類；JPG / PNG，每張最大 5MB
+                </p>
               </label>
               <Button
                 type="button"
-                variant="outline"
-                className="w-full"
+                variant="ghost"
+                size="sm"
+                className="w-full text-slate-500"
                 disabled={running}
-                onClick={() => folderInputRef.current?.click()}
+                onClick={() => inputRef.current?.click()}
               >
-                選擇整個資料夾上傳
+                只選幾張影像（不會有醫院 / 病人分類）
               </Button>
               <input
+                id="folder-input"
                 ref={(el) => {
                   folderInputRef.current = el;
                   el?.setAttribute("webkitdirectory", "");
