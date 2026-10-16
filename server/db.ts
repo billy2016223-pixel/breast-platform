@@ -109,6 +109,42 @@ export function insertAnalysis(row: {
   );
 }
 
+export function hasAnalysis(id: string): boolean {
+  return !!db.prepare(`SELECT 1 FROM analyses WHERE id = ?`).get(id);
+}
+
+// 從遠端（Render）同步回來的紀錄，保留原本的 id 與建立時間
+export function importAnalysis(rec: AnalysisRecord, image: Buffer) {
+  const imageFile = `${rec.id}.${EXT[rec.mimeType] ?? "bin"}`;
+  fs.writeFileSync(path.join(UPLOAD_DIR, imageFile), image);
+  db.prepare(
+    `INSERT OR IGNORE INTO analyses (
+      id, batch_id, file_name, mime_type, image_file, status, error,
+      pectoralis_score, nipple_score, tissue_completeness_score,
+      tissue_elasticity_score, radiation_dose_score, grade, defects,
+      analysis, analysis_time, created_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run(
+    rec.id,
+    rec.batchId,
+    rec.fileName,
+    rec.mimeType,
+    imageFile,
+    rec.status,
+    rec.error,
+    rec.pectoralisScore,
+    rec.nippleScore,
+    rec.tissueCompletenessScore,
+    rec.tissueElasticityScore,
+    rec.radiationDoseScore,
+    rec.grade,
+    JSON.stringify(rec.defects),
+    rec.analysis,
+    rec.analysisTime,
+    rec.createdAt
+  );
+}
+
 function toRecord(row: Record<string, unknown>): AnalysisRecord {
   return {
     id: row.id as string,

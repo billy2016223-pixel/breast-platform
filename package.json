@@ -10,7 +10,8 @@
     "dev": "tsx watch server/index.ts",
     "build": "vite build && esbuild server/index.ts --platform=node --packages=external --bundle --format=esm --outdir=dist",
     "start": "NODE_ENV=production node dist/index.js",
-    "local": "npm run build && node --env-file-if-exists=.env dist/index.js"
+    "local": "npm run build && node --env-file-if-exists=.env dist/index.js",
+    "sync": "tsx --env-file-if-exists=.env scripts/sync-from-remote.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.55.0",
