@@ -1,113 +1,135 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import AnalysisResultView, { gradeColor, type AnalysisScores } from "@/components/AnalysisResultView";
 import { trpc } from "@/lib/trpc";
-import { Upload, Loader2, CheckCircle2, AlertCircle } from "lucide-react";
+import { Upload, Loader2, CheckCircle2, AlertCircle, Clock, X } from "lucide-react";
 import { toast } from "sonner";
 
-type AnalysisResult = {
-  pectoralisScore: number;
-  nippleScore: number;
-  tissueCompletenessScore: number;
-  tissueElasticityScore: number;
-  radiationDoseScore: number;
-  grade: "A" | "B" | "C" | "D";
-  defects: string[];
-  analysis: string;
-  analysisTime: number;
+// 同時送出的分析請求數，避免一次打太多觸發 API 速率限制
+const CONCURRENCY = 3;
+const MAX_FILE_BYTES = 5 * 1024 * 1024;
+
+type ItemStatus = "pending" | "running" | "done" | "error";
+
+type QueueItem = {
+  key: string;
+  file: File;
+  previewUrl: string;
+  status: ItemStatus;
+  error?: string;
+  result?: AnalysisScores & { analysisTime: number; parseFailed?: boolean };
 };
 
-const gradeColor = (grade: string) => {
-  if (grade === "A") return "text-green-600 bg-green-50";
-  if (grade === "B") return "text-blue-600 bg-blue-50";
-  if (grade === "C") return "text-yellow-600 bg-yellow-50";
-  return "text-red-600 bg-red-50";
-};
+function readAsBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const url = reader.result as string;
+      resolve(url.slice(url.indexOf(",") + 1));
+    };
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(file);
+  });
+}
 
-const gradeLabel = (grade: string) => {
-  if (grade === "A") return "優等 (Excellent)";
-  if (grade === "B") return "符合 (Good)";
-  if (grade === "C") return "不予通過 (Fair)";
-  return "不予通過 (Poor)";
+const StatusIcon = ({ status }: { status: ItemStatus }) => {
+  if (status === "running") return <Loader2 className="w-4 h-4 animate-spin text-blue-600" />;
+  if (status === "done") return <CheckCircle2 className="w-4 h-4 text-green-600" />;
+  if (status === "error") return <AlertCircle className="w-4 h-4 text-red-600" />;
+  return <Clock className="w-4 h-4 text-slate-400" />;
 };
-
-const ScoreBar = ({ label, score, color }: { label: string; score: number; color: string }) => (
-  <div>
-    <div className="flex justify-between mb-1">
-      <span className="text-sm font-semibold text-slate-900">{label}</span>
-      <span className={`text-sm font-bold ${color}`}>{score}/100</span>
-    </div>
-    <div className="w-full bg-slate-200 rounded-full h-2">
-      <div className={`h-2 rounded-full ${color.replace("text-", "bg-")}`} style={{ width: `${score}%` }} />
-    </div>
-  </div>
-);
 
 export default function ImageAnalysis() {
-  const [selectedFile, setSelectedFile] = useState<File | null>(null);
-  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
-  const [result, setResult] = useState<AnalysisResult | null>(null);
+  const [items, setItems] = useState<QueueItem[]>([]);
+  const [running, setRunning] = useState(false);
+  const [selectedKey, setSelectedKey] = useState<string | null>(null);
+  const [dragOver, setDragOver] = useState(false);
+  const inputRef = useRef<HTMLInputElement>(null);
 
-  const analyzeMutation = trpc.imageAnalysis.analyze.useMutation({
-    onSuccess: (data) => {
-      setResult(data);
-      toast.success("AI 分析完成！");
-    },
-    onError: (err) => {
-      toast.error(err.message || "分析失敗，請稍後再試");
-    },
-  });
+  const analyzeMutation = trpc.imageAnalysis.analyze.useMutation();
 
-  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
+  const update = (key: string, patch: Partial<QueueItem>) =>
+    setItems((prev) => prev.map((it) => (it.key === key ? { ...it, ...patch } : it)));
 
-    if (file.size > 10 * 1024 * 1024) {
-      toast.error("檔案大小不能超過 10MB");
-      return;
-    }
-
-    setSelectedFile(file);
-    setResult(null);
-
-    if (file.type.startsWith("image/")) {
-      const reader = new FileReader();
-      reader.onload = (ev) => setPreviewUrl(ev.target?.result as string);
-      reader.readAsDataURL(file);
-    } else {
-      setPreviewUrl(null);
-    }
-  };
-
-  const handleAnalyze = () => {
-    if (!selectedFile) {
-      toast.error("請先選擇影像檔案");
-      return;
-    }
-
-    const reader = new FileReader();
-    reader.onload = (ev) => {
-      const arrayBuffer = ev.target?.result as ArrayBuffer;
-      const bytes = new Uint8Array(arrayBuffer);
-      let binary = "";
-      for (let i = 0; i < bytes.byteLength; i++) {
-        binary += String.fromCharCode(bytes[i]);
+  const addFiles = (fileList: FileList | null) => {
+    if (!fileList) return;
+    const accepted: QueueItem[] = [];
+    let skipped = 0;
+    for (const file of Array.from(fileList)) {
+      if (!file.type.startsWith("image/") || file.size > MAX_FILE_BYTES) {
+        skipped++;
+        continue;
       }
-      const base64 = btoa(binary);
-
-      if (base64.length > 7 * 1024 * 1024) {
-        toast.error("檔案過大，請使用 5MB 以下的影像");
-        return;
-      }
-
-      analyzeMutation.mutate({
-        fileBase64: base64,
-        mimeType: selectedFile.type || "image/jpeg",
+      accepted.push({
+        key: `${file.name}-${file.size}-${file.lastModified}-${Math.random().toString(36).slice(2)}`,
+        file,
+        previewUrl: URL.createObjectURL(file),
+        status: "pending",
       });
-    };
-    reader.readAsArrayBuffer(selectedFile);
+    }
+    if (skipped > 0) toast.error(`有 ${skipped} 個檔案不是影像或超過 5MB，已略過`);
+    setItems((prev) => [...prev, ...accepted]);
   };
+
+  const removeItem = (key: string) => {
+    setItems((prev) => {
+      const target = prev.find((it) => it.key === key);
+      if (target) URL.revokeObjectURL(target.previewUrl);
+      return prev.filter((it) => it.key !== key);
+    });
+    if (selectedKey === key) setSelectedKey(null);
+  };
+
+  const clearAll = () => {
+    items.forEach((it) => URL.revokeObjectURL(it.previewUrl));
+    setItems([]);
+    setSelectedKey(null);
+  };
+
+  const handleAnalyzeAll = async () => {
+    const queue = items.filter((it) => it.status === "pending" || it.status === "error");
+    if (queue.length === 0) {
+      toast.error("沒有待分析的影像");
+      return;
+    }
+    setRunning(true);
+    const batchId = `${new Date().toISOString().slice(0, 19).replace(/[-:T]/g, "")}-${Math.random()
+      .toString(36)
+      .slice(2, 6)}`;
+
+    let cursor = 0;
+    let okCount = 0;
+    const worker = async () => {
+      while (cursor < queue.length) {
+        const item = queue[cursor++];
+        update(item.key, { status: "running", error: undefined });
+        try {
+          const fileBase64 = await readAsBase64(item.file);
+          const result = await analyzeMutation.mutateAsync({
+            fileBase64,
+            mimeType: item.file.type || "image/jpeg",
+            fileName: item.file.name,
+            batchId,
+          });
+          update(item.key, { status: "done", result });
+          okCount++;
+        } catch (err) {
+          update(item.key, {
+            status: "error",
+            error: err instanceof Error ? err.message : "分析失敗",
+          });
+        }
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(CONCURRENCY, queue.length) }, worker));
+    setRunning(false);
+    toast.success(`批次分析完成，成功 ${okCount} / ${queue.length} 張`);
+  };
+
+  const doneCount = items.filter((it) => it.status === "done").length;
+  const errorCount = items.filter((it) => it.status === "error").length;
+  const selected = items.find((it) => it.key === selectedKey) ?? null;
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 to-slate-100 p-6">
@@ -115,124 +137,154 @@ export default function ImageAnalysis() {
         <div className="mb-8">
           <h1 className="text-3xl font-bold text-slate-900 mb-2">AI 影像判讀分析</h1>
           <p className="text-lg text-slate-600">
-            上傳乳房攝影影像，系統將自動進行 AI 品質評核
+            可一次選取多張乳房攝影影像，系統逐張進行 AI 品質評核並保存結果
           </p>
         </div>
 
-        <Tabs defaultValue="upload" className="w-full">
-          <TabsList className="grid w-full grid-cols-1 mb-6 max-w-xs">
-            <TabsTrigger value="upload">上傳與分析</TabsTrigger>
-          </TabsList>
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+          <Card className="border-slate-200">
+            <CardHeader>
+              <CardTitle>上傳影像</CardTitle>
+              <CardDescription>支援 JPG、PNG，可多選或拖曳整批檔案，每張最大 5MB</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <label
+                htmlFor="file-input"
+                onDragOver={(e) => {
+                  e.preventDefault();
+                  setDragOver(true);
+                }}
+                onDragLeave={() => setDragOver(false)}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  setDragOver(false);
+                  addFiles(e.dataTransfer.files);
+                }}
+                className={`block border-2 border-dashed rounded-lg p-8 text-center transition cursor-pointer ${
+                  dragOver ? "border-blue-500 bg-blue-50" : "border-slate-300 hover:border-blue-400"
+                }`}
+              >
+                <Upload className="w-12 h-12 text-slate-400 mx-auto mb-3" />
+                <p className="text-slate-600 font-semibold mb-1">點擊選擇或拖曳多張影像</p>
+                <p className="text-sm text-slate-400">JPG / PNG，每張最大 5MB</p>
+              </label>
+              <input
+                ref={inputRef}
+                id="file-input"
+                type="file"
+                accept="image/*"
+                multiple
+                className="hidden"
+                onChange={(e) => {
+                  addFiles(e.target.files);
+                  if (inputRef.current) inputRef.current.value = "";
+                }}
+              />
 
-          <TabsContent value="upload">
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-              {/* 上傳區 */}
-              <Card className="border-slate-200">
-                <CardHeader>
-                  <CardTitle>上傳影像</CardTitle>
-                  <CardDescription>支援 JPG、PNG 格式，最大 10MB</CardDescription>
-                </CardHeader>
-                <CardContent>
-                  <div className="space-y-4">
-                    <label
-                      htmlFor="file-input"
-                      className="block border-2 border-dashed border-slate-300 rounded-lg p-8 text-center hover:border-blue-400 transition cursor-pointer"
-                    >
-                      <Upload className="w-12 h-12 text-slate-400 mx-auto mb-3" />
-                      <p className="text-slate-600 font-semibold mb-1">點擊選擇影像</p>
-                      <p className="text-sm text-slate-400">JPG / PNG，最大 10MB</p>
-                    </label>
-                    <input
-                      id="file-input"
-                      type="file"
-                      accept="image/*"
-                      className="hidden"
-                      onChange={handleFileSelect}
-                    />
-
-                    {previewUrl && (
-                      <div>
-                        <p className="text-sm font-semibold text-slate-900 mb-2">預覽</p>
-                        <img src={previewUrl} alt="preview" className="w-full h-64 object-cover rounded-lg border border-slate-200" />
-                        <p className="text-xs text-slate-500 mt-1">
-                          {selectedFile?.name} — {((selectedFile?.size ?? 0) / 1024 / 1024).toFixed(2)} MB
-                        </p>
-                      </div>
-                    )}
-
-                    <Button
-                      onClick={handleAnalyze}
-                      disabled={!selectedFile || analyzeMutation.isPending}
-                      className="w-full bg-blue-600 hover:bg-blue-700"
-                    >
-                      {analyzeMutation.isPending ? (
-                        <>
-                          <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                          AI 分析中...
-                        </>
-                      ) : (
-                        "開始 AI 分析"
-                      )}
+              {items.length > 0 && (
+                <>
+                  <div className="flex items-center justify-between text-sm text-slate-600">
+                    <span>
+                      共 {items.length} 張，完成 {doneCount}，失敗 {errorCount}
+                    </span>
+                    <Button variant="ghost" size="sm" onClick={clearAll} disabled={running}>
+                      清空列表
                     </Button>
                   </div>
-                </CardContent>
-              </Card>
-
-              {/* 結果區 */}
-              {result && (
-                <Card className="border-slate-200">
-                  <CardHeader className={gradeColor(result.grade)}>
-                    <CardTitle className="flex items-center gap-2">
-                      <CheckCircle2 className="w-5 h-5" />
-                      AI 判讀結果
-                    </CardTitle>
-                    <CardDescription>
-                      分析耗時：{(result.analysisTime / 1000).toFixed(2)} 秒
-                    </CardDescription>
-                  </CardHeader>
-                  <CardContent className="space-y-6 pt-6">
-                    <div className="text-center">
-                      <div className={`text-6xl font-bold ${gradeColor(result.grade)}`}>
-                        {result.grade}
-                      </div>
-                      <p className="text-sm text-slate-600 mt-2">{gradeLabel(result.grade)}</p>
-                    </div>
-
-                    <div className="space-y-3">
-                      <ScoreBar label="胸大肌顯影度" score={result.pectoralisScore} color="text-blue-600" />
-                      <ScoreBar label="乳頭輪廓" score={result.nippleScore} color="text-emerald-600" />
-                      <ScoreBar label="組織完整性" score={result.tissueCompletenessScore} color="text-purple-600" />
-                      <ScoreBar label="組織延展性" score={result.tissueElasticityScore} color="text-orange-600" />
-                      <ScoreBar label="輻射劑量" score={result.radiationDoseScore} color="text-pink-600" />
-                    </div>
-
-                    <div>
-                      <p className="text-sm font-semibold text-slate-900 mb-2">分析說明</p>
-                      <p className="text-sm text-slate-700 bg-slate-50 p-3 rounded">{result.analysis}</p>
-                    </div>
-
-                    {result.defects.length > 0 && (
-                      <div>
-                        <p className="text-sm font-semibold text-slate-900 mb-2 flex items-center gap-1">
-                          <AlertCircle className="w-4 h-4" />
-                          發現的缺陷
-                        </p>
-                        <ul className="space-y-1">
-                          {result.defects.map((d, i) => (
-                            <li key={i} className="text-sm text-slate-700 flex items-start gap-2">
-                              <span className="text-amber-600 mt-1">•</span>
-                              {d}
-                            </li>
-                          ))}
-                        </ul>
-                      </div>
-                    )}
-                  </CardContent>
-                </Card>
+                  <div className="w-full bg-slate-200 rounded-full h-2">
+                    <div
+                      className="h-2 rounded-full bg-blue-600 transition-all"
+                      style={{ width: `${((doneCount + errorCount) / items.length) * 100}%` }}
+                    />
+                  </div>
+                  <ul className="max-h-96 overflow-y-auto divide-y divide-slate-100 border border-slate-200 rounded-lg">
+                    {items.map((it) => (
+                      <li
+                        key={it.key}
+                        onClick={() => setSelectedKey(it.key)}
+                        className={`flex items-center gap-3 p-2 cursor-pointer hover:bg-slate-50 ${
+                          selectedKey === it.key ? "bg-blue-50" : ""
+                        }`}
+                      >
+                        <img src={it.previewUrl} alt="" className="w-12 h-12 object-cover rounded border border-slate-200" />
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm text-slate-900 truncate">{it.file.name}</p>
+                          <p className="text-xs text-slate-500 truncate">
+                            {it.status === "error" ? it.error : `${(it.file.size / 1024 / 1024).toFixed(2)} MB`}
+                          </p>
+                        </div>
+                        {it.result?.grade && (
+                          <span className={`px-2 py-0.5 rounded text-sm font-bold ${gradeColor(it.result.grade)}`}>
+                            {it.result.grade}
+                          </span>
+                        )}
+                        <StatusIcon status={it.status} />
+                        {!running && (
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              removeItem(it.key);
+                            }}
+                            className="text-slate-400 hover:text-slate-700"
+                            aria-label="移除"
+                          >
+                            <X className="w-4 h-4" />
+                          </button>
+                        )}
+                      </li>
+                    ))}
+                  </ul>
+                </>
               )}
-            </div>
-          </TabsContent>
-        </Tabs>
+
+              <Button
+                onClick={handleAnalyzeAll}
+                disabled={running || items.every((it) => it.status === "done")}
+                className="w-full bg-blue-600 hover:bg-blue-700"
+              >
+                {running ? (
+                  <>
+                    <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                    AI 分析中（{doneCount + errorCount} / {items.length}）
+                  </>
+                ) : errorCount > 0 ? (
+                  "分析未完成與失敗的影像"
+                ) : (
+                  "開始 AI 分析"
+                )}
+              </Button>
+            </CardContent>
+          </Card>
+
+          {selected && (
+            <Card className="border-slate-200">
+              <CardHeader>
+                <CardTitle className="truncate">{selected.file.name}</CardTitle>
+                <CardDescription>
+                  {selected.result
+                    ? `分析耗時：${(selected.result.analysisTime / 1000).toFixed(2)} 秒`
+                    : selected.status === "error"
+                      ? selected.error
+                      : "尚未分析"}
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-6">
+                <img
+                  src={selected.previewUrl}
+                  alt={selected.file.name}
+                  className="w-full max-h-80 object-contain rounded-lg border border-slate-200 bg-black"
+                />
+                {selected.result?.parseFailed && (
+                  <p className="text-sm text-amber-700 bg-amber-50 p-3 rounded">
+                    AI 回應格式異常，以下分數為預設值，不代表實際評估結果。
+                  </p>
+                )}
+                {selected.result && <AnalysisResultView result={selected.result} />}
+              </CardContent>
+            </Card>
+          )}
+        </div>
       </div>
     </div>
   );

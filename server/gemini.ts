@@ -10,6 +10,7 @@ export interface AnalysisResult {
   defects: string[];
   analysis: string;
   analysisTime: number;
+  parseFailed?: boolean;
 }
 
 const SYSTEM_PROMPT = `你是乳房攝影影像品質評估系統。你只能回傳 JSON 物件，不能有任何其他文字、說明或 markdown 格式。`;
@@ -80,17 +81,24 @@ export async function analyzeBreastImage(imageData: {
   console.log("Claude raw response:", text.slice(0, 500));
 
   const match = text.match(/\{[\s\S]*\}/);
-  if (!match) {
+  let d: Record<string, unknown> | null = null;
+  if (match) {
+    try {
+      d = JSON.parse(match[0]);
+    } catch {
+      d = null;
+    }
+  }
+  if (!d) {
     return {
       pectoralisScore: 50, nippleScore: 50, tissueCompletenessScore: 50,
       tissueElasticityScore: 50, radiationDoseScore: 50, grade: "C" as const,
       defects: ["AI 無法解析此影像，請確認影像格式是否為標準乳房攝影"],
       analysis: "AI 回應格式異常，無法完成分析。請重新上傳或嘗試其他影像。",
       analysisTime: Date.now() - start,
+      parseFailed: true,
     };
   }
-
-  const d = JSON.parse(match[0]);
 
   return {
     pectoralisScore: validateScore(d.pectoralisScore),

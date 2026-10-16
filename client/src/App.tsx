@@ -6,6 +6,7 @@ import TechniqueFeeCalculator from "./pages/TechniqueFeeCalculator";
 import DefectDatabase from "./pages/DefectDatabase";
 import ProfessionalLevels from "./pages/ProfessionalLevels";
 import ImageAnalysis from "./pages/ImageAnalysis";
+import Admin from "./pages/Admin";
 import NotFound from "./pages/NotFound";
 
 export default function App() {
@@ -19,6 +20,7 @@ export default function App() {
         <Route path="/defects" component={DefectDatabase} />
         <Route path="/levels" component={ProfessionalLevels} />
         <Route path="/image-analysis" component={ImageAnalysis} />
+        <Route path="/admin" component={Admin} />
         <Route component={NotFound} />
       </Switch>
     </>
