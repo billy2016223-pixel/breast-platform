@@ -61,6 +61,12 @@ export function parseFolder(relativePath: string | undefined): {
 
 export const NO_FOLDER = "__none__";
 
+// 沒有資料夾資訊時，改用檔名開頭的病歷號分病人，例如 3791523_20230620_MG_2_4_4.jpg -> 3791523
+const FILE_NAME_PATIENT = /^(\d+)_\d{8}_/;
+export function patientFromFileName(fileName: string): string | null {
+  return FILE_NAME_PATIENT.exec(fileName)?.[1] ?? null;
+}
+
 export type AnalysisStatus = "ok" | "parse_failed" | "error";
 
 export interface AnalysisRecord {
@@ -112,6 +118,7 @@ export function insertAnalysis(row: {
 }) {
   const r = row.result;
   const folder = parseFolder(row.relativePath);
+  folder.patient ??= patientFromFileName(row.fileName);
   db.prepare(
     `INSERT INTO analyses (
       id, batch_id, file_name, mime_type, image_file, status, error,
@@ -178,7 +185,7 @@ export function importAnalysis(rec: AnalysisRecord, image: Buffer) {
     rec.createdAt,
     rec.folderPath ?? null,
     rec.hospital ?? null,
-    rec.patient ?? null
+    rec.patient ?? patientFromFileName(rec.fileName)
   );
 }
 
@@ -291,4 +298,16 @@ export function getImageFile(id: string): { path: string; mimeType: string } | n
     | undefined;
   if (!row) return null;
   return { path: path.join(UPLOAD_DIR, row.image_file), mimeType: row.mime_type };
+}
+
+// 啟動時替舊紀錄補上由檔名推得的病人
+{
+  const rows = db
+    .prepare(`SELECT id, file_name FROM analyses WHERE patient IS NULL`)
+    .all() as { id: string; file_name: string }[];
+  const update = db.prepare(`UPDATE analyses SET patient = ? WHERE id = ?`);
+  for (const row of rows) {
+    const patient = patientFromFileName(row.file_name);
+    if (patient) update.run(patient, row.id);
+  }
 }
