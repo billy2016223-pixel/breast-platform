@@ -44,7 +44,8 @@ for (const col of ["folder_path", "hospital", "patient"]) {
 }
 db.exec(`CREATE INDEX IF NOT EXISTS idx_analyses_folder ON analyses(hospital, patient)`);
 
-// 上傳時的相對路徑如「醫院/病人/影像.jpg」，取最後兩層資料夾作為醫院與病人
+// 上傳時的相對路徑如「馬偕/001-020/001/影像.jpg」：
+// 最外層（使用者選的那個資料夾）是醫院，影像所在的資料夾是病人，中間的分組層略過
 export function parseFolder(relativePath: string | undefined): {
   folderPath: string | null;
   hospital: string | null;
@@ -55,7 +56,7 @@ export function parseFolder(relativePath: string | undefined): {
   return {
     folderPath: dirs.join("/"),
     patient: dirs[dirs.length - 1],
-    hospital: dirs.length >= 2 ? dirs[dirs.length - 2] : null,
+    hospital: dirs.length >= 2 ? dirs[0] : null,
   };
 }
 
@@ -184,8 +185,9 @@ export function importAnalysis(rec: AnalysisRecord, image: Buffer) {
     rec.analysisTime,
     rec.createdAt,
     rec.folderPath ?? null,
-    rec.hospital ?? null,
-    rec.patient ?? patientFromFileName(rec.fileName)
+    // 以本機規則從資料夾路徑重新推算，不依賴雲端版本的判斷
+    rec.folderPath ? parseFolder(`${rec.folderPath}/x`).hospital : null,
+    rec.folderPath ? parseFolder(`${rec.folderPath}/x`).patient : patientFromFileName(rec.fileName)
   );
 }
 
@@ -298,6 +300,18 @@ export function getImageFile(id: string): { path: string; mimeType: string } | n
     | undefined;
   if (!row) return null;
   return { path: path.join(UPLOAD_DIR, row.image_file), mimeType: row.mime_type };
+}
+
+// 啟動時依目前的規則重新整理已有資料夾路徑的紀錄
+{
+  const rows = db
+    .prepare(`SELECT id, folder_path FROM analyses WHERE folder_path IS NOT NULL`)
+    .all() as { id: string; folder_path: string }[];
+  const update = db.prepare(`UPDATE analyses SET hospital = ?, patient = ? WHERE id = ?`);
+  for (const row of rows) {
+    const f = parseFolder(`${row.folder_path}/x`);
+    update.run(f.hospital, f.patient, row.id);
+  }
 }
 
 // 啟動時替舊紀錄補上由檔名推得的病人

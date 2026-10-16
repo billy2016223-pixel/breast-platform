@@ -209,7 +209,7 @@ export default function ImageAnalysis() {
                 <Upload className="w-12 h-12 text-slate-400 mx-auto mb-3" />
                 <p className="text-slate-600 font-semibold mb-1">點擊選擇資料夾，或把資料夾拖進來</p>
                 <p className="text-sm text-slate-400">
-                  請選最外層（含各醫院）的資料夾，系統會依「醫院 / 病人」自動分類；JPG / PNG，每張最大 5MB
+                  請選「一間醫院」的資料夾（例如「馬偕」），系統會依醫院與病人資料夾自動分類；JPG / PNG，每張最大 5MB
                 </p>
               </label>
               <Button
